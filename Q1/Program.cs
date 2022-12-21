@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -9,48 +10,120 @@ namespace Q1
     internal static class Program
     {
         private static int selectionSet = 100;
-        private static Random randomize = new Random();
         private static double MC = 40;
         private static double SC = 10;
+        private static readonly Dictionary<int, double> PearsonTable = new Dictionary<int, double>{
+            { 1, 3.8 }, { 2, 6.0 }, { 3, 7.8 }, { 4, 9.5 },
+            { 5, 11.1 }, { 6, 12.6}, {7, 14.1}, {8 , 15.5}
+        };
 
         static void Main(string[] args)
         {
-            double[] ranVals = new double[selectionSet];
-            for (int index = 0; index < selectionSet; index++)
+            //Генерация случайной величины и разбиение её значений по интервалам Стрёрджерса
+            RandomVariable variable = new RandomVariable(selectionSet, MC, SC);     
+            SturgessIntervals intervals = new SturgessIntervals(variable);
+
+            //Нахождение выборочного среднего 
+            double xMiddle = (double)intervals
+                .Select(interval => interval.Middle * interval.Count).Sum()
+                / intervals.Select(interval => interval.Count).Sum();
+
+            //Выделение списка частот и нахождение списка теоретических частот
+            List<double> frequencies = intervals.Select(interval => (double)interval.Count).ToList();
+            List<double> theorFrequencies = GetTheorFrequancies(intervals, xMiddle, variable.Sigma);
+
+            //Блок выводов сигмы и мат.ожидания
+            Console.WriteLine($"Теор. знач. мат.ожидания: {MC}");
+            Console.WriteLine($"Теор. знач. сигмы: {SC}");
+            Console.WriteLine($"Оценка мат.ожидания: {variable.MathExpectation}");
+            Console.WriteLine($"Оценка сигмы: {variable.Sigma}");
+            Console.WriteLine($"Ошибка мат.ожидания: {Math.Round(MC - variable.MathExpectation, 2)}");
+            Console.WriteLine($"Ошибка дисперсии: {Math.Round(SC - variable.Sigma, 2)}\n");
+
+            //Вывод интервалов и частот
+            Console.WriteLine($"С шагом {intervals.Step} образовано {intervals.Count} интервалов:");
+            intervals.ForEach(interval =>
             {
-                ranVals[index] = Repeat(randomize.NextDouble, 12).Sum() - 6;
-            };
+                Console.WriteLine($"{interval.Index + 1}) [{interval.LowerBorder}-{interval.UpperBorder}], " +
+                    $"n = {interval.Count}, n' = {theorFrequencies[interval.Index]}");
+            });
+            Console.WriteLine();
 
-            double mathExp = ranVals.Sum() / selectionSet;
-            double disp = ranVals.Mutate(element => Math.Pow(element - mathExp, 2)).Sum() / selectionSet;
-            double meanSqrDiv = Math.Sqrt(disp);
-            double mathExpDiv = MC - mathExp;
-            double meanSqrDivDiv = SC - meanSqrDiv;
+            //Объединение малочисленных частот (в т.ч. теоретических)
+            while(frequencies.Any(value => value < 5))
+            {
+                for (int index = 0; index < frequencies.Count / 2; index++)
+                {
+                    if (frequencies[index] < 5)
+                    {
+                        frequencies[index + 1] += frequencies[index];
+                        frequencies.Remove(frequencies[index]);
+                        theorFrequencies[index + 1] += theorFrequencies[index];
+                        theorFrequencies.Remove(theorFrequencies[index]);
+                        break;
+                    }
+                }
+                for (int index = frequencies.Count - 1; index > 0; --index)
+                {
+                    if (frequencies[index] < 5)
+                    {
+                        frequencies[index - 1] += frequencies[index];
+                        frequencies.Remove(frequencies[index]);
+                        theorFrequencies[index - 1] += theorFrequencies[index];
+                        theorFrequencies.Remove(theorFrequencies[index]);
+                        break;
+                    }
+                }
+            }
 
-            int stepCount = (int)((ranVals.Max() - ranVals.Min()) / (1 + 3.3221 * Math.Log(selectionSet)));
-            double step = (ranVals.Max() - ranVals.Min()) / stepCount;
-            Array.Sort(ranVals);
+            //Вывод частот объединённых интервалов
+            Console.WriteLine($"В результате объединения малочисленных частот образовано {frequencies.Count} интервалов:");
+            for (int index = 0; index < frequencies.Count; index++)
+            {
+                Console.WriteLine($"{index + 1}) n = {frequencies[index]}, n' = {theorFrequencies[index]}");
+            }
+            Console.WriteLine();
 
-            //Array groups = new double[stepCount];
+            //Нахождение наблюдаемого и критического значения критерия Пирсона, выделение числа степеней свободы
+            double Hi2Observed = 0;
+            for (int index = 0; index < frequencies.Count; index++)
+            {
+                Hi2Observed += Math.Pow(frequencies[index] - theorFrequencies[index], 2) / theorFrequencies[index];
+            }
+            Hi2Observed = Math.Round(Hi2Observed, 3);
+            int degreesOfFreedom = frequencies.Count - 3;
+            double Hi2Crit = PearsonTable[frequencies.Count - 2];
+
+            //Вывод итогов
+            Console.WriteLine($"При числе степеней свободы {degreesOfFreedom} и уровне значимости 0,05:\n" +
+                $"X2набл = {Hi2Observed}, X2крит = {Hi2Crit}\n" +
+                $"Следовательно гипотеза {((Hi2Observed < Hi2Crit) ? "принимается" : "отвергается")}");
         }
 
-        public static T[] Repeat<T>(Func<T> operation, int count)
+        private static List<double> GetTheorFrequancies(SturgessIntervals intervals, double xMiddle, double sigma)
         {
-            T[] result = new T[count];
-            for (int index = 0; index < count; index++)
+            List<double> result = new List<double>();
+            for (int index = 0; index < intervals.Count; index++)
             {
-                result.Append(operation());
+                result.Add(new double());
+                if (intervals[index].Count != 0)
+                {
+                    result[index] = CalculateFrequancy(
+                            intervals[index].Middle,
+                            intervals.Step,
+                            sigma,
+                            xMiddle
+                        );
+                }
             }
             return result;
         }
-        public static double[] Mutate(this double[] array, Func<double, double> mutator)
+
+        private static double CalculateFrequancy(double xi, double step, double sigma, double xMiddle)
         {
-            var result = new double[array.Length];
-            for (int index = 0; index < array.Length; index++)
-            {
-                result[index] = mutator(array[index]);
-            }
-            return result;
+            double Ui = (xi - xMiddle) / sigma;
+            double fi = Math.Exp(-1 * Math.Pow(Ui, 2) / 2) / (Math.Sqrt(2 * Math.PI));
+            return fi * selectionSet * step / sigma;
         }
     }
 }
